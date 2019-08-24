@@ -281,12 +281,16 @@ function get_sim_data(rec::EntityQueueRecord{S,D,I}, roadway::Roadway{Float64},
                     "vel" => [])
 
     ticks = nframes(rec)
+    start_tag = nothing
     for frame_index in 1:ticks
         scene = rec[frame_index-ticks]
         ego = scene[findfirst(EGO_ID, scene)]
 
         ego_lanetag = ego.state.posF.roadind.tag
-        target_lanetag = LaneTag(ego_lanetag.segment, ego_lanetag.lane+1)
+        if isnothing(start_tag)
+            start_tag = ego_lanetag
+        end
+        target_lanetag = LaneTag(start_tag.segment, start_tag.lane+1)
 
         # track time to merge
         if merge_tick == -1
