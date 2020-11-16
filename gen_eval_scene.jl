@@ -1,5 +1,5 @@
 using AutomotiveDrivingModels
-using NNMPC
+# using NNMPC
 
 const EGO_ID = 1
 
@@ -28,12 +28,12 @@ convert simulation parameters dictionary to structure
 """
 function dict_to_params(params::Dict)
     road = get(params, "length", 1000.0)
-    lanes = get(params, "lanes", 3)
-    cars = get(params, "cars", 50)
+    lanes = get(params, "lanes", 2)
+    cars = get(params, "cars", 60)
     dt = get(params, "dt", 0.2)
     maxticks = get(params, "maxticks", 200)
     stadium = get(params, "stadium", false)
-    hri = get(params, "hri", true)
+    hri = get(params, "hri", false)
     curriculum = get(params, "curriculum", false)
     carlength = get(params, "carlength", 4.0)
 
@@ -56,15 +56,17 @@ function dict_to_params(params::Dict)
     end
 
     ego_pos = rand(1:cars)
-    if hri
+    if !hri
         if lanes == 2
-            valid = collect(1:2:cars)
+            # valid = collect(1:2:cars)
+            valid = collect(1:cars)
             num_valid = length(valid)
-            ego_pos = rand(valid[max(num_valid-7, 1):end])
+            ego_pos = rand(valid[max(num_valid-30, 1):end])
         elseif lanes == 3
-            valid = collect(2:3:cars)
+            # valid = collect(2:3:cars)
+            valid = collect(1:cars)
             num_valid = length(valid)
-            ego_pos = rand(valid[max(num_valid-7, 1):end])
+            ego_pos = rand(valid[max(num_valid-30, 1):end])
         end
     end
 
@@ -120,13 +122,13 @@ function populate_scene(params::HRIParams, roadway::Roadway{Float64})
 
     ego = get_vehicle(params, roadway, params.ego_pos, EGO_ID)
     push!(scene, ego)
-    carcolours[EGO_ID] = COLOR_CAR_EGO
+    carcolours[EGO_ID] = HSV(0, 1.0, 0.95)
 
     room = params.carlength * 1.1
     ego_lanetag = ego.state.posF.roadind.tag
     ego_s = params.rooms[ego_lanetag.lane,
                                         Int(ceil(params.ego_pos/params.lanes))]
-    s_deadend = ego_s + (35.0 * rand() + 5.0)
+    s_deadend = ego_s + (45.0 * rand() + 5.0)
     ignore_idx = findall(x -> x,
                 abs.(params.rooms[ego_lanetag.lane, :] .- s_deadend) .< room)
     posF = Frenet(roadway[ego_lanetag], s_deadend, 0.0, 0.0)
@@ -157,6 +159,12 @@ function populate_scene(params::HRIParams, roadway::Roadway{Float64})
 
         if i ≠ params.ego_pos
             vehicle = get_vehicle(params, roadway, i, v_num)
+
+            if vehicle.state.posF.roadind.tag == ego_lanetag &&
+                vehicle.state.posF.s ≥ s_deadend
+                continue
+            end
+
             push!(scene, vehicle)
 
             η_coop = nothing
@@ -185,7 +193,7 @@ function populate_scene(params::HRIParams, roadway::Roadway{Float64})
                                         ΔT=params.dt,
                                         ),
                                     )
-            carcolours[v_num] = HSV(0, 1.0 - η_coop, 1.0)
+            carcolours[v_num] = HSV(110, η_coop, 0.9)
 
             v_des = (rand() * 3.0) + 2.0
             AutomotiveDrivingModels.set_desired_speed!(models[v_num], v_des)
@@ -211,154 +219,155 @@ function make_scene(paramset::Dict=Dict())
     (roadway, scene, models, colours)
 end
 
-# # TEST
-# using Blink
-# using Interact
-# using AutoViz
-#
-# # I had to write these lines because `using NNMPC` throws this error
-# # '''
-# # ERROR: LoadError: syntax: extra token "(" after end of expression
-# # in expression starting at /home/dsaxena/.julia/packages/NNMPC/0pX7d/src/NNMPC.jl:21
-# # '''
-# using Distributions
-# using Parameters
-# include("baffling_drivers.jl")
-#
-# roadway, scene, models, colours = make_scene()
-# w = Window()
-# ui = @manipulate for frame in 1:1
-#     render(scene, roadway, cam=CarFollowCamera(EGO_ID, 8.0), car_colors=colours)
-# end
-# body!(w, ui)
-
-using DelimitedFiles
-using Statistics
+# TEST
+using Blink
+using Interact
 using AutoViz
 
-"""
-    collision_check(
-            veh₁::Entity{VehicleState, D, Int},
-            veh₂::Entity{VehicleState, D, Int}) where {D}
-check for collision between two vehicles
-"""
-function collision_check(
-            veh₁::Entity{VehicleState, D, Int},
-            veh₂::Entity{VehicleState, D, Int}) where {D}
-    x₁, y₁, θ₁ = veh₁.state.posG.x, veh₁.state.posG.y, veh₁.state.posG.θ
-    x₂, y₂, θ₂ = veh₂.state.posG.x, veh₂.state.posG.y, veh₂.state.posG.θ
-    l = (max(veh₁.def.length, veh₂.def.length) * 1.01) / 2.0
-    w = (max(veh₁.def.width, veh₂.def.width) * 1.01) / 2.0
+# I had to write these lines because `using NNMPC` throws this error
+# '''
+# ERROR: LoadError: syntax: extra token "(" after end of expression
+# in expression starting at /home/dsaxena/.julia/packages/NNMPC/0pX7d/src/NNMPC.jl:21
+# '''
+using Distributions
+using Parameters
+include("baffling_drivers.jl")
 
-    r = w
-    min_dist = Inf
-    for i in [-1, 0, 1]
-        for j in [-1, 0, 1]
-            dist = sqrt(
-                      ((x₁ + i *  (l - r) * cos(θ₁)) -
-                                (x₂ + j * (l - r) * cos(θ₂)))^2
-                     + ((y₁ + i * (l - r) * sin(θ₁)) -
-                                (y₂ + j * (l - r) * sin(θ₂)))^2
-                     )     - 2 * r
-            min_dist = min(dist, min_dist)
-        end
-    end
-    return max(min_dist, 0)
+roadway, scene, models, colours = make_scene()
+w = Window()
+ui = @manipulate for frame in 1:1
+    render(scene, roadway, cam=CarFollowCamera(EGO_ID, 10.0), car_colors=colours)
 end
+body!(w, ui)
 
-"""
-    get_sim_data(rec::EntityQueueRecord{S,D,I}, roadway::Roadway{Float64},
-                dt::Float64)
-calculate the evaluation metrics from a list of scenes
-"""
-function get_sim_data(rec::EntityQueueRecord{S,D,I}, roadway::Roadway{Float64},
-                dt::Float64)
-    merge_tick = -1
-    merge_count = 0
-    min_dist = Inf
-    ego_data = Dict{String, Vector{Float64}}(
-                    "deviation" => [],
-                    "vel" => [])
+# using DelimitedFiles
+# using Statistics
+# using AutoViz
 
-    ticks = nframes(rec)
-    start_tag = nothing
-    for frame_index in 1:ticks
-        scene = rec[frame_index-ticks]
-        ego = scene[findfirst(EGO_ID, scene)]
+# """
+#     collision_check(
+#             veh₁::Entity{VehicleState, D, Int},
+#             veh₂::Entity{VehicleState, D, Int}) where {D}
+# check for collision between two vehicles
+# """
+# function collision_check(
+#             veh₁::Entity{VehicleState, D, Int},
+#             veh₂::Entity{VehicleState, D, Int}) where {D}
+#     x₁, y₁, θ₁ = veh₁.state.posG.x, veh₁.state.posG.y, veh₁.state.posG.θ
+#     x₂, y₂, θ₂ = veh₂.state.posG.x, veh₂.state.posG.y, veh₂.state.posG.θ
+#     l = (max(veh₁.def.length, veh₂.def.length) * 1.01) / 2.0
+#     w = (max(veh₁.def.width, veh₂.def.width) * 1.01) / 2.0
 
-        ego_lanetag = ego.state.posF.roadind.tag
-        if isnothing(start_tag)
-            start_tag = ego_lanetag
-        end
-        target_lanetag = LaneTag(start_tag.segment, start_tag.lane+1)
+#     r = w
+#     min_dist = Inf
+#     for i in [-1, 0, 1]
+#         for j in [-1, 0, 1]
+#             dist = sqrt(
+#                       ((x₁ + i *  (l - r) * cos(θ₁)) -
+#                                 (x₂ + j * (l - r) * cos(θ₂)))^2
+#                      + ((y₁ + i * (l - r) * sin(θ₁)) -
+#                                 (y₂ + j * (l - r) * sin(θ₂)))^2
+#                      )     - 2 * r
+#             min_dist = min(dist, min_dist)
+#         end
+#     end
+#     return max(min_dist, 0)
+# end
 
-        # track time to merge
-        if merge_tick == -1
-            if ego_lanetag.lane == target_lanetag.lane
-                merge_tick = frame_index
-            end
-        end
-        # # Dhruv's preferred method for determining a merge
-        # if ego_lanetag.lane == target_lanetag.lane
-        #     merge_count += 1
-        #     if merge_tick == -1 && merge_count ≥ Int(10 / dt)
-        #         merge_tick = frame_index
-        #     end
-        # else
-        #     if merge_count > 0
-        #         merge_count = 0
-        #     end
-        # end
+# """
+#     get_sim_data(rec::EntityQueueRecord{S,D,I}, roadway::Roadway{Float64},
+#                 dt::Float64)
+# calculate the evaluation metrics from a list of scenes
+# """
+# function get_sim_data(rec::EntityQueueRecord{S,D,I}, roadway::Roadway{Float64},
+#                 dt::Float64) where {S, D, I <: DriverModel}
+#     merge_tick = -1
+#     merge_count = 0
+#     min_dist = Inf
+#     ego_data = Dict{String, Vector{Float64}}(
+#                     "deviation" => [],
+#                     "vel" => [])
 
-        # track mininmum distance to other vehicles
-        for veh in scene
-            if veh.id != EGO_ID
-                dist = collision_check(ego, veh)
-                min_dist = min(dist, min_dist)
-            end
-        end
+#     ticks = nframes(rec)
+#     start_tag = nothing
+#     for frame_index in 1:ticks
+#         scene = rec[frame_index-ticks]
+#         ego = scene[findfirst(EGO_ID, scene)]
 
-        # track desired lane offset
-        ego_proj = Frenet(ego.state.posG,
-                        roadway[target_lanetag], roadway)
-        Δt = abs(ego_proj.t)
-        push!(ego_data["deviation"], Δt)
-        push!(ego_data["velocity"], ego.state.v)
-    end
+#         ego_lanetag = ego.state.posF.roadind.tag
+#         if isnothing(start_tag)
+#             start_tag = ego_lanetag
+#         end
+#         target_lanetag = LaneTag(start_tag.segment, start_tag.lane+1)
 
-    (merge_tick, ticks, min_dist, ego_data)
-end
+#         # track time to merge
+#         if merge_tick == -1
+#             if ego_lanetag.lane == target_lanetag.lane
+#                 merge_tick = frame_index
+#             end
+#         end
+#         # # Dhruv's preferred method for determining a merge
+#         # if ego_lanetag.lane == target_lanetag.lane
+#         #     merge_count += 1
+#         #     if merge_tick == -1 && merge_count ≥ Int(10 / dt)
+#         #         merge_tick = frame_index
+#         #     end
+#         # else
+#         #     if merge_count > 0
+#         #         merge_count = 0
+#         #     end
+#         # end
 
-"""
-    write_data(env::EnvState, filename::String="default.dat")
-log data for last episode
-"""
-function write_data(
-                rec::EntityQueueRecord{S,D,I},
-                roadway::Roadway{Float64},
-                params::HRIParams,
-                filename::String="default.dat") where {S<:VehicleState,D,I,R}
+#         # track mininmum distance to other vehicles
+#         for veh in scene
+#             if veh.id != EGO_ID
+#                 dist = collision_check(ego, veh)
+#                 min_dist = min(dist, min_dist)
+#             end
+#         end
 
-    merge_tick, ticks, min_dist, ego_data = get_sim_data(
-                                                        rec, roadway, params.dt)
-    offsets = ego_data["deviation"]
-    vels = ego_data["velocity"]
+#         # track desired lane offset
+#         ego_proj = Frenet(ego.state.posG,
+#                         roadway[target_lanetag], roadway)
+#         Δt = abs(ego_proj.t)
+#         push!(ego_data["deviation"], Δt)
+#         push!(ego_data["velocity"], ego.state.v)
+#     end
 
-    open(filename, "w") do f
-        merge_tick = merge_tick
-        ticks = ticks
-        min_dist = min_dist
-        avg_offset = mean(offsets)
-        write(f, "$merge_tick\n")
-        write(f, "$ticks\n")
-        write(f, "$min_dist\n")
-        write(f, "$avg_offset\n")
+#     (merge_tick, ticks, min_dist, ego_data)
+# end
 
-        val = reshape(offsets, (1, length(offsets)))
-        write(f, "offsets,")
-        writedlm(f, val, ",")
+# """
+#     write_data(env::EnvState, filename::String="default.dat")
+# log data for last episode
+# """
+# function write_data(
+#                 rec::EntityQueueRecord{S,D,I},
+#                 roadway::Roadway{Float64},
+#                 params::HRIParams,
+#                 filename::String="default.dat") where {S<:VehicleState,D,I,R}
 
-        val = reshape(vels, (1, length(vels)))
-        write(f, "velocity,")
-        writedlm(f, val, ",")
-    end
+#     merge_tick, ticks, min_dist, ego_data = get_sim_data(
+#                                                         rec, roadway, params.dt)
+#     offsets = ego_data["deviation"]
+#     vels = ego_data["velocity"]
+
+#     open(filename, "w") do f
+#         merge_tick = merge_tick
+#         ticks = ticks
+#         min_dist = min_dist
+#         avg_offset = mean(offsets)
+#         write(f, "$merge_tick\n")
+#         write(f, "$ticks\n")
+#         write(f, "$min_dist\n")
+#         write(f, "$avg_offset\n")
+
+#         val = reshape(offsets, (1, length(offsets)))
+#         write(f, "offsets,")
+#         writedlm(f, val, ",")
+
+#         val = reshape(vels, (1, length(vels)))
+#         write(f, "velocity,")
+#         writedlm(f, val, ",")
+#     end
+# end
